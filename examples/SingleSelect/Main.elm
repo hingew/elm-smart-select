@@ -23,27 +23,19 @@ type alias Model =
 
 
 type Msg
-    = HandleSelectUpdate (SingleSelect.Msg Product)
-    | HandleSelection ( Product, SingleSelect.Msg Product )
+    = HandleSelection ( Maybe Product, SingleSelect.Msg Product )
     | HandleFormSubmission
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        HandleSelectUpdate sMsg ->
-            let
-                ( updatedSelect, selectCmd ) =
-                    SingleSelect.update sMsg model.select
-            in
-            ( { model | select = updatedSelect }, selectCmd )
-
         HandleSelection ( selection, sMsg ) ->
             let
                 ( updatedSelect, selectCmd ) =
                     SingleSelect.update sMsg model.select
             in
-            ( { model | selectedProduct = Just selection, select = updatedSelect }, selectCmd )
+            ( { model | selectedProduct = selection, select = updatedSelect }, selectCmd )
 
         HandleFormSubmission ->
             ( { model | wasFormSubmitted = True }, Cmd.none )
@@ -116,11 +108,7 @@ exampleProducts =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { products = exampleProducts
-      , select =
-            SingleSelect.init
-                { selectionMsg = HandleSelection
-                , internalMsg = HandleSelectUpdate
-                }
+      , select = SingleSelect.init HandleSelection
       , selectedProduct = Nothing
       , wasFormSubmitted = False
       }

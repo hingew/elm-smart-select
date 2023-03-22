@@ -23,27 +23,20 @@ type alias Model =
 
 
 type Msg
-    = HandleSelectUpdate (MultiSelect.Msg Product)
-    | HandleSelection ( List Product, MultiSelect.Msg Product )
+    = HandleSelection ( Maybe (List Product), MultiSelect.Msg Product )
     | HandleFormSubmission
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
-        HandleSelectUpdate sMsg ->
-            let
-                ( updatedSelect, selectCmd ) =
-                    MultiSelect.update sMsg model.select
-            in
-            ( { model | select = updatedSelect }, selectCmd )
-
         HandleSelection ( selection, sMsg ) ->
             let
                 ( updatedSelect, selectCmd ) =
                     MultiSelect.update sMsg model.select
+
             in
-            ( { model | selectedProducts = selection, select = updatedSelect }, selectCmd )
+            ( { model | selectedProducts = Maybe.withDefault model.selectedProducts selection, select = updatedSelect } ,selectCmd )
 
         HandleFormSubmission ->
             ( { model | wasFormSubmitted = True }, Cmd.none )
@@ -122,11 +115,7 @@ exampleProducts =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { products = exampleProducts
-      , select =
-            MultiSelect.init
-                { selectionMsg = HandleSelection
-                , internalMsg = HandleSelectUpdate
-                }
+      , select = MultiSelect.init HandleSelection
       , selectedProducts = []
       , wasFormSubmitted = False
       }

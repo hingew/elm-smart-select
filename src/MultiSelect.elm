@@ -32,8 +32,7 @@ type alias Model msg a =
     , isOpen : Bool
     , searchText : String
     , focusedOptionIndex : Int
-    , selectionMsg : ( List a, Msg a ) -> msg
-    , internalMsg : Msg a -> msg
+    , msg : ( Maybe (List a), Msg a ) -> msg
     }
 
 
@@ -53,19 +52,17 @@ type Msg a
 
 {-| Instantiates and returns a smart select.
 
-  - `selectionMsg` takes a function that expects a tuple representing the list of selections and a MultiSelect.Msg and returns an externally defined msg for handling selection.
-  - `internalMsg` takes a function that expects a MultiSelect.Msg and returns an externally defined msg for handling the update of the select.
+  - `msg` takes a function that expects a tuple representing the list of selections and a MultiSelect.Msg and returns an externally defined msg for handling selection.
 
 -}
-init : { selectionMsg : ( List a, Msg a ) -> msg, internalMsg : Msg a -> msg } -> SmartSelect msg a
-init { selectionMsg, internalMsg } =
+init : (( Maybe (List a), Msg a ) -> msg) -> SmartSelect msg a
+init msg =
     SmartSelect
         { selectWidth = 0
         , isOpen = False
         , searchText = ""
         , focusedOptionIndex = 0
-        , selectionMsg = selectionMsg
-        , internalMsg = internalMsg
+        , msg = msg
         }
 
 
@@ -80,29 +77,29 @@ subscriptions : SmartSelect msg a -> Sub msg
 subscriptions (SmartSelect model) =
     if model.isOpen then
         Sub.batch
-            [ Browser.Events.onResize (\h w -> model.internalMsg <| WindowResized ( h, w ))
-            , Browser.Events.onMouseDown (clickedOutsideSelect smartSelectId model.internalMsg)
+            [ Browser.Events.onResize (\h w -> model.msg ( Nothing, WindowResized ( h, w ) ))
+            , Browser.Events.onMouseDown (clickedOutsideSelect smartSelectId model.msg)
             ]
 
     else
         Sub.none
 
 
-clickedOutsideSelect : String -> (Msg a -> msg) -> Decode.Decoder msg
-clickedOutsideSelect componentId internalMsg =
+clickedOutsideSelect : String -> (( Maybe (List a), Msg a ) -> msg) -> Decode.Decoder msg
+clickedOutsideSelect componentId msg =
     Decode.field "target" (Utilities.eventIsOutsideComponent componentId)
         |> Decode.andThen
             (\isOutside ->
                 if isOutside then
-                    Decode.succeed <| internalMsg Close
+                    Decode.succeed <| msg ( Nothing, Close )
 
                 else
                     Decode.fail "inside component"
             )
 
 
-keyActionMapper : { options : List ( Int, a ), selectedOptions : List a, focusedOptionIndex : Int, selectionMsg : ( List a, Msg a ) -> msg, internalMsg : Msg a -> msg } -> Decode.Decoder ( msg, Bool )
-keyActionMapper { options, selectedOptions, focusedOptionIndex, selectionMsg, internalMsg } =
+keyActionMapper : { options : List ( Int, a ), selectedOptions : List a, focusedOptionIndex : Int, msg : ( Maybe (List a), Msg a ) -> msg } -> Decode.Decoder ( msg, Bool )
+keyActionMapper { options, selectedOptions, focusedOptionIndex, msg } =
     Decode.field "key" Decode.string
         |> Decode.map Utilities.toKeyCode
         |> Decode.map
@@ -117,7 +114,7 @@ keyActionMapper { options, selectedOptions, focusedOptionIndex, selectionMsg, in
                                 else
                                     focusedOptionIndex - 1
                         in
-                        ( internalMsg <| UpKeyPressed newIdx, Utilities.preventDefault key )
+                        ( msg ( Nothing, UpKeyPressed newIdx ), Utilities.preventDefault key )
 
                     Down ->
                         let
@@ -128,21 +125,21 @@ keyActionMapper { options, selectedOptions, focusedOptionIndex, selectionMsg, in
                                 else
                                     focusedOptionIndex + 1
                         in
-                        ( internalMsg <| DownKeyPressed newIdx, Utilities.preventDefault key )
+                        ( msg ( Nothing, DownKeyPressed newIdx ), Utilities.preventDefault key )
 
                     Enter ->
                         case Dict.get focusedOptionIndex (Dict.fromList options) of
                             Just item ->
-                                ( selectionMsg ( item :: selectedOptions, SetFocused <| Utilities.newFocusedOptionIndexAfterSelection focusedOptionIndex ), Utilities.preventDefault key )
+                                ( msg ( Just (item :: selectedOptions), SetFocused (Utilities.newFocusedOptionIndexAfterSelection focusedOptionIndex) ), Utilities.preventDefault key )
 
                             Nothing ->
-                                ( internalMsg NoOp, Utilities.preventDefault key )
+                                ( msg ( Nothing, NoOp ), Utilities.preventDefault key )
 
                     Escape ->
-                        ( internalMsg Close, Utilities.preventDefault key )
+                        ( msg ( Nothing, Close ), Utilities.preventDefault key )
 
                     Other ->
-                        ( internalMsg NoOp, Utilities.preventDefault key )
+                        ( msg ( Nothing, NoOp ), Utilities.preventDefault key )
             )
 
 
@@ -155,19 +152,19 @@ update msg (SmartSelect model) =
             ( SmartSelect model, Cmd.none )
 
         SetFocused idx ->
-            ( SmartSelect { model | focusedOptionIndex = idx }, focusInput model.internalMsg )
+            ( SmartSelect { model | focusedOptionIndex = idx }, focusInput model.msg )
 
         UpKeyPressed idx ->
-            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.internalMsg idx )
+            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.msg idx )
 
         DownKeyPressed idx ->
-            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.internalMsg idx )
+            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.msg idx )
 
         SetSearchText text ->
             ( SmartSelect { model | searchText = text, focusedOptionIndex = 0 }, Cmd.none )
 
         WindowResized _ ->
-            ( SmartSelect model, getSelectWidth model.internalMsg )
+            ( SmartSelect model, getSelectWidth model.msg )
 
         MaybeGotSelect result ->
             case result of
@@ -176,31 +173,31 @@ update msg (SmartSelect model) =
                         selectWidth =
                             component.element |> (\el -> el.width)
                     in
-                    ( SmartSelect { model | selectWidth = selectWidth }, focusInput model.internalMsg )
+                    ( SmartSelect { model | selectWidth = selectWidth }, focusInput model.msg )
 
                 Err _ ->
                     ( SmartSelect model, Cmd.none )
 
         Open ->
-            ( SmartSelect { model | isOpen = True, focusedOptionIndex = 0 }, Cmd.batch [ getSelectWidth model.internalMsg, focusInput model.internalMsg ] )
+            ( SmartSelect { model | isOpen = True, focusedOptionIndex = 0 }, Cmd.batch [ getSelectWidth model.msg, focusInput model.msg ] )
 
         Close ->
             ( SmartSelect { model | isOpen = False, searchText = "" }, Cmd.none )
 
 
-focusInput : (Msg a -> msg) -> Cmd msg
+focusInput : (( Maybe (List a), Msg a ) -> msg) -> Cmd msg
 focusInput internalMsg =
-    Task.attempt (\_ -> internalMsg NoOp) (Dom.focus "smart-select-input")
+    Task.attempt (\_ -> internalMsg ( Nothing, NoOp )) (Dom.focus "smart-select-input")
 
 
-getSelectWidth : (Msg a -> msg) -> Cmd msg
+getSelectWidth : (( Maybe (List a), Msg a ) -> msg) -> Cmd msg
 getSelectWidth internalMsg =
-    Task.attempt (\select -> internalMsg <| MaybeGotSelect select) (Dom.getElement smartSelectId)
+    Task.attempt (\select -> internalMsg ( Nothing, MaybeGotSelect select )) (Dom.getElement smartSelectId)
 
 
-scrollToOption : (Msg a -> msg) -> Int -> Cmd msg
+scrollToOption : (( Maybe (List a), Msg a ) -> msg) -> Int -> Cmd msg
 scrollToOption internalMsg idx =
-    Task.attempt (\_ -> internalMsg NoOp) (scrollTask idx)
+    Task.attempt (\_ -> internalMsg ( Nothing, NoOp )) (scrollTask idx)
 
 
 scrollTask : Int -> Task.Task Dom.Error ()
@@ -243,8 +240,7 @@ optionId idx =
 
 
 showOptions :
-    { selectionMsg : ( List a, Msg a ) -> msg
-    , internalMsg : Msg a -> msg
+    { msg : ( Maybe (List a), Msg a ) -> msg
     , selectedOptions : List a
     , options : List ( Int, a )
     , optionLabelFn : a -> String
@@ -256,7 +252,7 @@ showOptions :
     , noOptionsMsg : String
     }
     -> Html msg
-showOptions { selectionMsg, internalMsg, selectedOptions, options, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, searchText, focusedOptionIndex, noResultsForMsg, noOptionsMsg } =
+showOptions { msg, selectedOptions, options, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, searchText, focusedOptionIndex, noResultsForMsg, noOptionsMsg } =
     if List.isEmpty options && searchText /= "" then
         div [ class (classPrefix ++ "search-or-no-results-text") ] [ text <| noResultsForMsg searchText ]
 
@@ -268,8 +264,9 @@ showOptions { selectionMsg, internalMsg, selectedOptions, options, optionLabelFn
             (List.map
                 (\( idx, option ) ->
                     div
-                        [ Events.stopPropagationOn "click" (Decode.succeed ( selectionMsg ( option :: selectedOptions, SetFocused <| Utilities.newFocusedOptionIndexAfterSelection focusedOptionIndex ), True ))
-                        , onMouseEnter <| internalMsg <| SetFocused idx
+                        [ Events.stopPropagationOn "click"
+                            (Decode.succeed ( msg ( Just (option :: selectedOptions), SetFocused <| Utilities.newFocusedOptionIndexAfterSelection focusedOptionIndex ), True ))
+                        , onMouseEnter <| msg ( Nothing, SetFocused idx )
                         , id <| optionId idx
                         , classList
                             [ ( classPrefix ++ "select-option", True ), ( classPrefix ++ "select-option-focused", idx == focusedOptionIndex ) ]
@@ -307,15 +304,17 @@ filterAndIndexOptions { options, selectedOptions, searchFn, searchText } =
 
 
 selectedEntityWrapper :
-    { selectionMsg : ( List a, Msg a ) -> msg
+    { msg : ( Maybe (List a), Msg a ) -> msg
     , viewSelectedOptionFn : a -> Html msg
     , selectedOptions : List a
     }
     -> a
     -> Html msg
-selectedEntityWrapper { selectionMsg, viewSelectedOptionFn, selectedOptions } selectedOption =
+selectedEntityWrapper { msg, viewSelectedOptionFn, selectedOptions } selectedOption =
     div
-        [ class (classPrefix ++ "selected-entity-wrapper"), Events.stopPropagationOn "click" (Decode.succeed ( selectionMsg ( List.filter (\e -> e /= selectedOption) selectedOptions, NoOp ), True )) ]
+        [ class (classPrefix ++ "selected-entity-wrapper")
+        , Events.stopPropagationOn "click" (Decode.succeed ( msg ( Just (List.filter (\e -> e /= selectedOption) selectedOptions), NoOp ), True ))
+        ]
         [ viewSelectedOptionFn selectedOption ]
 
 
@@ -452,7 +451,7 @@ viewCustom { isDisabled, selected, options, optionLabelFn, optionDescriptionFn, 
                 div [ class (classPrefix ++ "multi-selected-container") ]
                     (List.map
                         (selectedEntityWrapper
-                            { selectionMsg = model.selectionMsg
+                            { msg = model.msg
                             , viewSelectedOptionFn = viewSelectedOptionFn
                             , selectedOptions = selected
                             }
@@ -477,15 +476,14 @@ viewCustom { isDisabled, selected, options, optionLabelFn, optionDescriptionFn, 
     else
         div
             [ id smartSelectId
-            , onClick <| model.internalMsg Open
-            , Events.stopPropagationOn "keypress" (Decode.map Utilities.alwaysStopPropogation (Decode.succeed <| model.internalMsg NoOp))
+            , onClick <| model.msg ( Nothing, Open )
+            , Events.stopPropagationOn "keypress" (Decode.map Utilities.alwaysStopPropogation (Decode.succeed <| model.msg ( Nothing, NoOp )))
             , Events.preventDefaultOn "keydown"
                 (keyActionMapper
                     { options = filterAndIndexOptions { options = options, selectedOptions = selected, searchFn = searchFn, searchText = model.searchText }
                     , selectedOptions = selected
                     , focusedOptionIndex = model.focusedOptionIndex
-                    , selectionMsg = model.selectionMsg
-                    , internalMsg = model.internalMsg
+                    , msg = model.msg
                     }
                 )
             , classList
@@ -503,7 +501,7 @@ viewCustom { isDisabled, selected, options, optionLabelFn, optionDescriptionFn, 
                                 [ id "smart-select-input"
                                 , class (classPrefix ++ "multi-input")
                                 , autocomplete False
-                                , onInput <| \val -> model.internalMsg <| SetSearchText val
+                                , onInput <| \val -> model.msg ( Nothing, SetSearchText val )
                                 , value model.searchText
                                 ]
                                 []
@@ -512,7 +510,7 @@ viewCustom { isDisabled, selected, options, optionLabelFn, optionDescriptionFn, 
                             |> List.append
                                 (List.map
                                     (selectedEntityWrapper
-                                        { selectionMsg = model.selectionMsg
+                                        { msg = model.msg
                                         , viewSelectedOptionFn = viewSelectedOptionFn
                                         , selectedOptions = selected
                                         }
@@ -535,8 +533,7 @@ viewCustom { isDisabled, selected, options, optionLabelFn, optionDescriptionFn, 
                             ]
                         ]
                         [ showOptions
-                            { selectionMsg = model.selectionMsg
-                            , internalMsg = model.internalMsg
+                            { msg = model.msg
                             , selectedOptions = selected
                             , options = filterAndIndexOptions { options = options, selectedOptions = selected, searchFn = searchFn, searchText = model.searchText }
                             , optionLabelFn = optionLabelFn

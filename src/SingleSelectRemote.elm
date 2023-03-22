@@ -41,8 +41,7 @@ type alias Model msg a =
     , spinner : Spinner.Model
     , remoteData : RemoteData ( String, String ) (List a)
     , focusedOptionIndex : Int
-    , selectionMsg : ( a, Msg a ) -> msg
-    , internalMsg : Msg a -> msg
+    , msg : ( Maybe a, Msg a ) -> msg
     , characterSearchThreshold : Int
     , debounceDuration : Float
     }
@@ -68,14 +67,13 @@ type Msg a
 
 {-| Instantiates and returns a smart select.
 
-  - `selectionMsg` takes a function that expects a tuple representing the selection and a SinglSelectRemote.Msg msg and returns an externally defined msg for handling selection.
-  - `internalMsg` takes a function that expects a SingleSelectRemote.Msg and returns an externally defined msg.
+  - `msg` takes a function that expects a tuple representing the selection and a SinglSelectRemote.Msg msg and returns an externally defined msg for handling selection.
   - `characterSearchThreshold` takes an integer that specifies how many characters need to be typed before triggering the remote query.
   - `debounceDuration` takes a float that specifies the duration in milliseconds between the last keypress and remote query being triggered.
 
 -}
-init : { selectionMsg : ( a, Msg a ) -> msg, internalMsg : Msg a -> msg, characterSearchThreshold : Int, debounceDuration : Float } -> SmartSelect msg a
-init { selectionMsg, internalMsg, characterSearchThreshold, debounceDuration } =
+init : { msg : ( Maybe a, Msg a ) -> msg, characterSearchThreshold : Int, debounceDuration : Float } -> SmartSelect msg a
+init { msg, characterSearchThreshold, debounceDuration } =
     SmartSelect
         { selectWidth = 0
         , isOpen = False
@@ -84,8 +82,7 @@ init { selectionMsg, internalMsg, characterSearchThreshold, debounceDuration } =
         , spinner = Spinner.init
         , remoteData = NotAsked
         , focusedOptionIndex = 0
-        , selectionMsg = selectionMsg
-        , internalMsg = internalMsg
+        , msg = msg
         , characterSearchThreshold = characterSearchThreshold
         , debounceDuration = debounceDuration
         }
@@ -102,42 +99,42 @@ subscriptions : SmartSelect msg a -> Sub msg
 subscriptions (SmartSelect model) =
     if model.isOpen then
         Sub.batch
-            [ Browser.Events.onResize (\h w -> model.internalMsg <| WindowResized ( h, w ))
+            [ Browser.Events.onResize (\h w -> model.msg ( Nothing, WindowResized ( h, w ) ))
             , case model.remoteData of
                 NotAsked ->
                     if model.characterSearchThreshold == 0 then
-                        Sub.map (\sMsg -> model.internalMsg <| SpinnerMsg sMsg) Spinner.subscription
+                        Sub.map (\sMsg -> model.msg ( Nothing, SpinnerMsg sMsg )) Spinner.subscription
 
                     else
                         Sub.none
 
                 Loading ->
-                    Sub.map (\sMsg -> model.internalMsg <| SpinnerMsg sMsg) Spinner.subscription
+                    Sub.map (\sMsg -> model.msg ( Nothing, SpinnerMsg sMsg )) Spinner.subscription
 
                 _ ->
                     Sub.none
-            , Browser.Events.onMouseDown (clickedOutsideSelect smartSelectId model.internalMsg)
+            , Browser.Events.onMouseDown (clickedOutsideSelect smartSelectId model.msg)
             ]
 
     else
         Sub.none
 
 
-clickedOutsideSelect : String -> (Msg a -> msg) -> Decode.Decoder msg
-clickedOutsideSelect componentId internalMsg =
+clickedOutsideSelect : String -> (( Maybe a, Msg a ) -> msg) -> Decode.Decoder msg
+clickedOutsideSelect componentId msg =
     Decode.field "target" (Utilities.eventIsOutsideComponent componentId)
         |> Decode.andThen
             (\isOutside ->
                 if isOutside then
-                    Decode.succeed <| internalMsg Close
+                    Decode.succeed <| msg ( Nothing, Close )
 
                 else
                     Decode.fail "inside component"
             )
 
 
-keyActionMapper : { remoteData : RemoteData ( String, String ) (List a), selectedOption : Maybe a, focusedOptionIndex : Int, selectionMsg : ( a, Msg a ) -> msg, internalMsg : Msg a -> msg } -> Decode.Decoder ( msg, Bool )
-keyActionMapper { remoteData, selectedOption, focusedOptionIndex, selectionMsg, internalMsg } =
+keyActionMapper : { remoteData : RemoteData ( String, String ) (List a), selectedOption : Maybe a, focusedOptionIndex : Int, msg : ( Maybe a, Msg a ) -> msg } -> Decode.Decoder ( msg, Bool )
+keyActionMapper { remoteData, selectedOption, focusedOptionIndex, msg } =
     let
         filteredOptions =
             case remoteData of
@@ -161,7 +158,7 @@ keyActionMapper { remoteData, selectedOption, focusedOptionIndex, selectionMsg, 
                                 else
                                     focusedOptionIndex - 1
                         in
-                        ( internalMsg <| UpKeyPressed newIdx, Utilities.preventDefault key )
+                        ( msg ( Nothing, UpKeyPressed newIdx ), Utilities.preventDefault key )
 
                     Down ->
                         let
@@ -172,28 +169,28 @@ keyActionMapper { remoteData, selectedOption, focusedOptionIndex, selectionMsg, 
                                 else
                                     focusedOptionIndex + 1
                         in
-                        ( internalMsg <| DownKeyPressed newIdx, Utilities.preventDefault key )
+                        ( msg ( Nothing, DownKeyPressed newIdx ), Utilities.preventDefault key )
 
                     Enter ->
                         case Dict.get focusedOptionIndex (Dict.fromList filteredOptions) of
                             Just item ->
-                                ( selectionMsg ( item, Close ), Utilities.preventDefault key )
+                                ( msg ( Just item, Close ), Utilities.preventDefault key )
 
                             Nothing ->
-                                ( internalMsg NoOp, Utilities.preventDefault key )
+                                ( msg ( Nothing, NoOp ), Utilities.preventDefault key )
 
                     Escape ->
-                        ( internalMsg Close, Utilities.preventDefault key )
+                        ( msg ( Nothing, Close ), Utilities.preventDefault key )
 
                     Other ->
-                        ( internalMsg NoOp, Utilities.preventDefault key )
+                        ( msg ( Nothing, NoOp ), Utilities.preventDefault key )
             )
 
 
-debounceConfig : { internalMsg : Msg a -> msg, debounceDuration : Float } -> Debounce.Config msg
-debounceConfig { internalMsg, debounceDuration } =
+debounceConfig : { msg : ( Maybe a, Msg a ) -> msg, debounceDuration : Float } -> Debounce.Config msg
+debounceConfig { msg, debounceDuration } =
     { strategy = Debounce.later debounceDuration
-    , transform = \debounceMsg -> internalMsg <| DebounceMsg debounceMsg
+    , transform = \debounceMsg -> msg ( Nothing, DebounceMsg debounceMsg )
     }
 
 
@@ -216,10 +213,10 @@ update msg remoteQueryAttrs (SmartSelect model) =
             ( SmartSelect { model | focusedOptionIndex = idx }, Cmd.none )
 
         UpKeyPressed idx ->
-            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.internalMsg idx )
+            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.msg idx )
 
         DownKeyPressed idx ->
-            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.internalMsg idx )
+            ( SmartSelect { model | focusedOptionIndex = idx }, scrollToOption model.msg idx )
 
         SetSearchText text ->
             if String.length text < model.characterSearchThreshold then
@@ -228,7 +225,7 @@ update msg remoteQueryAttrs (SmartSelect model) =
             else
                 let
                     ( debounce, cmd ) =
-                        Debounce.push (debounceConfig { internalMsg = model.internalMsg, debounceDuration = model.debounceDuration }) text model.debounce
+                        Debounce.push (debounceConfig { msg = model.msg, debounceDuration = model.debounceDuration }) text model.debounce
                 in
                 ( SmartSelect { model | searchText = text, debounce = debounce }
                 , cmd
@@ -238,8 +235,8 @@ update msg remoteQueryAttrs (SmartSelect model) =
             let
                 ( debounce, cmd ) =
                     Debounce.update
-                        (debounceConfig { internalMsg = model.internalMsg, debounceDuration = model.debounceDuration })
-                        (Debounce.takeLast (search { remoteQueryAttrs = remoteQueryAttrs, internalMsg = model.internalMsg }))
+                        (debounceConfig { msg = model.msg, debounceDuration = model.debounceDuration })
+                        (Debounce.takeLast (search { remoteQueryAttrs = remoteQueryAttrs, msg = model.msg }))
                         msg_
                         model.debounce
             in
@@ -258,7 +255,7 @@ update msg remoteQueryAttrs (SmartSelect model) =
             ( SmartSelect { model | focusedOptionIndex = 0, remoteData = RemoteData.mapError (Errors.httpErrorToReqErrTuple "GET") data }, Cmd.none )
 
         WindowResized _ ->
-            ( SmartSelect model, getSelectWidth model.internalMsg )
+            ( SmartSelect model, getSelectWidth model.msg )
 
         MaybeGotSelect result ->
             case result of
@@ -267,7 +264,7 @@ update msg remoteQueryAttrs (SmartSelect model) =
                         selectWidth =
                             component.element |> (\el -> el.width)
                     in
-                    ( SmartSelect { model | selectWidth = selectWidth }, focusInput model.internalMsg )
+                    ( SmartSelect { model | selectWidth = selectWidth }, focusInput model.msg )
 
                 Err _ ->
                     ( SmartSelect model, Cmd.none )
@@ -284,10 +281,10 @@ update msg remoteQueryAttrs (SmartSelect model) =
             let
                 cmd =
                     if model.characterSearchThreshold == 0 then
-                        Cmd.batch [ search { remoteQueryAttrs = remoteQueryAttrs, internalMsg = model.internalMsg } "", getSelectWidth model.internalMsg ]
+                        Cmd.batch [ search { remoteQueryAttrs = remoteQueryAttrs, msg = model.msg } "", getSelectWidth model.msg ]
 
                     else
-                        Cmd.batch [ getSelectWidth model.internalMsg, focusInput model.internalMsg ]
+                        Cmd.batch [ getSelectWidth model.msg, focusInput model.msg ]
             in
             ( SmartSelect { model | isOpen = True, focusedOptionIndex = 0 }, cmd )
 
@@ -295,32 +292,32 @@ update msg remoteQueryAttrs (SmartSelect model) =
             ( SmartSelect { model | isOpen = False, searchText = "", remoteData = NotAsked }, Cmd.none )
 
 
-search : { remoteQueryAttrs : RemoteQueryAttrs a, internalMsg : Msg a -> msg } -> String -> Cmd msg
-search { remoteQueryAttrs, internalMsg } searchText =
+search : { remoteQueryAttrs : RemoteQueryAttrs a, msg : ( Maybe a, Msg a ) -> msg } -> String -> Cmd msg
+search { remoteQueryAttrs, msg } searchText =
     Http.request
         { method = "GET"
         , headers = remoteQueryAttrs.headers
         , url = remoteQueryAttrs.url searchText
         , body = Http.emptyBody
-        , expect = Http.expectJson (\results -> RemoteData.fromResult results |> (\remoteData -> internalMsg <| GotRemoteData remoteData)) (Utilities.decodeOptions remoteQueryAttrs.optionDecoder)
+        , expect = Http.expectJson (\results -> RemoteData.fromResult results |> (\remoteData -> msg ( Nothing, GotRemoteData remoteData ))) (Utilities.decodeOptions remoteQueryAttrs.optionDecoder)
         , timeout = Nothing
         , tracker = Nothing
         }
 
 
-focusInput : (Msg a -> msg) -> Cmd msg
-focusInput internalMsg =
-    Task.attempt (\_ -> internalMsg NoOp) (Dom.focus "smart-select-input")
+focusInput : (( Maybe a, Msg a ) -> msg) -> Cmd msg
+focusInput msg =
+    Task.attempt (\_ -> msg ( Nothing, NoOp )) (Dom.focus "smart-select-input")
 
 
-getSelectWidth : (Msg a -> msg) -> Cmd msg
-getSelectWidth internalMsg =
-    Task.attempt (\select -> internalMsg <| MaybeGotSelect select) (Dom.getElement "smart-select-component")
+getSelectWidth : (( Maybe a, Msg a ) -> msg) -> Cmd msg
+getSelectWidth msg =
+    Task.attempt (\select -> msg ( Nothing, MaybeGotSelect select )) (Dom.getElement "smart-select-component")
 
 
-scrollToOption : (Msg a -> msg) -> Int -> Cmd msg
-scrollToOption internalMsg idx =
-    Task.attempt (\_ -> internalMsg NoOp) (scrollTask idx)
+scrollToOption : (( Maybe a, Msg a ) -> msg) -> Int -> Cmd msg
+scrollToOption msg idx =
+    Task.attempt (\_ -> msg ( Nothing, NoOp )) (scrollTask idx)
 
 
 scrollTask : Int -> Task.Task Dom.Error ()
@@ -368,8 +365,7 @@ showSpinner { spinner, spinnerColor } =
 
 
 showOptions :
-    { selectionMsg : ( a, Msg a ) -> msg
-    , internalMsg : Msg a -> msg
+    { msg : ( Maybe a, Msg a ) -> msg
     , focusedOptionIndex : Int
     , searchText : String
     , options : List ( Int, a )
@@ -380,7 +376,7 @@ showOptions :
     , noOptionsMsg : String
     }
     -> Html msg
-showOptions { selectionMsg, internalMsg, focusedOptionIndex, searchText, options, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, noResultsForMsg, noOptionsMsg } =
+showOptions { msg, focusedOptionIndex, searchText, options, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, noResultsForMsg, noOptionsMsg } =
     if List.isEmpty options && searchText /= "" then
         div [ class (classPrefix ++ "search-or-no-results-text") ] [ text <| noResultsForMsg searchText ]
 
@@ -392,8 +388,8 @@ showOptions { selectionMsg, internalMsg, focusedOptionIndex, searchText, options
             (List.map
                 (\( idx, option ) ->
                     div
-                        [ Events.stopPropagationOn "click" (Decode.succeed ( selectionMsg ( option, Close ), True ))
-                        , onMouseEnter <| internalMsg <| SetFocused idx
+                        [ Events.stopPropagationOn "click" (Decode.succeed ( msg ( option, Close ), True ))
+                        , onMouseEnter <| msg ( Nothing, SetFocused idx )
                         , id <| optionId idx
                         , classList
                             [ ( classPrefix ++ "select-option", True ), ( classPrefix ++ "select-option-focused", idx == focusedOptionIndex ) ]
@@ -414,8 +410,7 @@ showOptions { selectionMsg, internalMsg, focusedOptionIndex, searchText, options
 
 
 viewRemoteData :
-    { selectionMsg : ( a, Msg a ) -> msg
-    , internalMsg : Msg a -> msg
+    { msg : ( Maybe a, Msg a ) -> msg
     , focusedOptionIndex : Int
     , characterSearchThreshold : Int
     , searchText : String
@@ -432,7 +427,7 @@ viewRemoteData :
     , noOptionsMsg : String
     }
     -> Html msg
-viewRemoteData { selectionMsg, internalMsg, focusedOptionIndex, characterSearchThreshold, searchText, selectedOption, remoteData, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, spinner, spinnerColor, characterThresholdPrompt, queryErrorMsg, noResultsForMsg, noOptionsMsg } =
+viewRemoteData { msg, focusedOptionIndex, characterSearchThreshold, searchText, selectedOption, remoteData, optionLabelFn, optionDescriptionFn, optionsContainerMaxHeight, spinner, spinnerColor, characterThresholdPrompt, queryErrorMsg, noResultsForMsg, noOptionsMsg } =
     case remoteData of
         NotAsked ->
             if characterSearchThreshold == 0 then
@@ -457,8 +452,7 @@ viewRemoteData { selectionMsg, internalMsg, focusedOptionIndex, characterSearchT
 
         Success options ->
             showOptions
-                { selectionMsg = selectionMsg
-                , internalMsg = internalMsg
+                { msg = msg
                 , focusedOptionIndex = focusedOptionIndex
                 , searchText = searchText
                 , options = filterAndIndexOptions { allOptions = options, selectedOption = selectedOption }
@@ -476,7 +470,7 @@ viewRemoteData { selectionMsg, internalMsg, focusedOptionIndex, characterSearchT
                         [ text queryErrorMsg ]
                     , span
                         [ class (classPrefix ++ "dismiss-error-x")
-                        , onClick <| internalMsg DismissError
+                        , onClick <| msg ( Nothing, DismissError )
                         ]
                         [ Icons.x
                             |> Icons.withSize 12
@@ -547,8 +541,7 @@ import Html exposing (Html)
 import Color
 
 type Msg
-    = HandleSelectUpdate (SingleSelectRemote.Msg Product)
-    | HandleSelection ( Product, SingleSelectRemote.Msg Product )
+    = HandleSelection ( Maybe Product, SingleSelectRemote.Msg Product )
 
 type alias Product =
     { name : String
@@ -559,12 +552,7 @@ type alias Product =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { products = exampleProducts
-      , select =
-            SingleSelectRemote.init
-                { selectionMsg = HandleSelection
-                , internalMsg = HandleSelectUpdate
-                ...
-                }
+      , select = SingleSelectRemote.init HandleSelection
       , selectedProduct = Nothing
       }
     , Cmd.none
@@ -643,15 +631,14 @@ viewCustom { isDisabled, selected, optionLabelFn, optionDescriptionFn, optionsCo
                 , ( classPrefix ++ "enabled-closed", not model.isOpen )
                 , ( classPrefix ++ "enabled-opened", model.isOpen )
                 ]
-            , onClick <| model.internalMsg Open
-            , Events.stopPropagationOn "keypress" (Decode.map Utilities.alwaysStopPropogation (Decode.succeed <| model.internalMsg NoOp))
+            , onClick <| model.msg ( Nothing, Open )
+            , Events.stopPropagationOn "keypress" (Decode.map Utilities.alwaysStopPropogation (Decode.succeed <| model.msg ( Nothing, NoOp )))
             , Events.preventDefaultOn "keydown"
                 (keyActionMapper
                     { remoteData = model.remoteData
                     , selectedOption = selected
                     , focusedOptionIndex = model.focusedOptionIndex
-                    , selectionMsg = model.selectionMsg
-                    , internalMsg = model.internalMsg
+                    , msg = model.msg
                     }
                 )
             ]
@@ -673,15 +660,14 @@ viewCustom { isDisabled, selected, optionLabelFn, optionDescriptionFn, optionsCo
                                 [ id "smart-select-input"
                                 , class (classPrefix ++ "single-selector-input")
                                 , autocomplete False
-                                , onInput <| \val -> model.internalMsg <| SetSearchText val
+                                , onInput <| \val -> model.msg ( Nothing, SetSearchText val )
                                 , placeholder <| searchPrompt
                                 , value model.searchText
                                 ]
                                 []
                             ]
                         , viewRemoteData
-                            { selectionMsg = model.selectionMsg
-                            , internalMsg = model.internalMsg
+                            { msg = model.msg
                             , focusedOptionIndex = model.focusedOptionIndex
                             , characterSearchThreshold = model.characterSearchThreshold
                             , searchText = model.searchText
